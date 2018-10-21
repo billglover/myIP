@@ -4,46 +4,34 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/billglover/myIP/pkg/ipmon"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
-	reqCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+	changeCount = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: "myip",
-		Subsystem: "client",
-		Name:      "requests_total",
-		Help:      "IP request count",
-	}, []string{"code"})
-	reqErrCount = prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: "myip",
-		Subsystem: "client",
-		Name:      "requests_err_total",
-		Help:      "IP request error count",
+		Subsystem: "ipmon",
+		Name:      "UpdateIP_req_total",
+		Help:      "IP update request count",
 	})
-	changeCount = prometheus.NewCounter(prometheus.CounterOpts{
+	changeErrCount = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: "myip",
-		Subsystem: "client",
-		Name:      "changes_total",
-		Help:      "the number of times the IP has changed",
+		Subsystem: "ipmon",
+		Name:      "UpdateIP_err_total",
+		Help:      "IP update error count",
 	})
-	reqDurations = prometheus.NewSummary(
-		prometheus.SummaryOpts{
-			Name:       "request_durations_seconds",
-			Help:       "IP request latency distributions",
-			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
-		},
-	)
 )
 
 func main() {
-	prometheus.MustRegister(reqCount, reqErrCount, reqDurations, changeCount)
 	http.Handle("/metrics/", promhttp.Handler())
 
 	ch := make(chan net.IP, 1)
-	ipmon.WatchExternalIP(ch)
+	ipmon.WatchExternalIP(ch, 10*time.Second)
 	updateIP(ch)
 
 	log.Fatal(http.ListenAndServe(":8080", nil))
@@ -54,6 +42,7 @@ func updateIP(ips chan net.IP) {
 		for {
 			select {
 			case ip := <-ips:
+				changeCount.Inc()
 				log.Println("Update IP:", ip)
 			}
 		}

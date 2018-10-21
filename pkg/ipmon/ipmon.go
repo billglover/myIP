@@ -2,7 +2,6 @@ package ipmon
 
 import (
 	"context"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"net"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // ServiceURL is the URL of the remote service that will return the external
@@ -26,13 +26,19 @@ var reqTimeout = 1 * time.Second
 // is identified by making a call to an externally hosted service. This
 // requires access to the internet.
 func GetExternalIP() (net.IP, error) {
+	reqCount.Inc()
 
 	req, err := http.NewRequest(http.MethodGet, ServiceURL, nil)
 	if err != nil {
+		reqErrCount.Inc()
 		return nil, errors.Wrap(err, "failed to create request")
 	}
 
 	client := http.Client{Timeout: reqTimeout}
+
+	roundTripper := promhttp.InstrumentRoundTripperDuration(reqDurations, http.DefaultTransport)
+	client.Transport = roundTripper
+
 	res, err := client.Do(req)
 
 	if res != nil {
@@ -40,16 +46,19 @@ func GetExternalIP() (net.IP, error) {
 	}
 
 	if err != nil {
+		reqErrCount.Inc()
 		return nil, errors.Wrap(err, "failed to make request")
 	}
 
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
+		reqErrCount.Inc()
 		return nil, errors.Wrap(err, "failed to parse response body")
 	}
 
 	ip := net.ParseIP(strings.TrimSpace(string(body)))
 	if ip == nil {
+		reqErrCount.Inc()
 		return nil, errors.New("no IP address returned")
 	}
 
@@ -57,10 +66,10 @@ func GetExternalIP() (net.IP, error) {
 }
 
 // WatchExternalIP starts monitoring the external IP address for changes. It
-// takes a channel and uses it to return changes in the external IP address.
-// It returns a cancel function that can be used to terminate the routine.
-// The Go channel must be serviced, or the routine will hang.
-func WatchExternalIP(ch chan<- net.IP) (context.CancelFunc, error) {
+// takes a channel and a period and returns changes in the external IP address
+// via the channel. It returns a cancel function that can be used to terminate
+// the routine. The Go channel must be serviced, or the routine will hang.
+func WatchExternalIP(ch chan<- net.IP, p time.Duration) (context.CancelFunc, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	prevIP, err := GetExternalIP()
@@ -70,12 +79,16 @@ func WatchExternalIP(ch chan<- net.IP) (context.CancelFunc, error) {
 
 	go func() {
 		for {
-			t := time.NewTicker(10 * time.Second)
+			t := time.NewTicker(p)
 			select {
 			case <-t.C:
 				ip, err := GetExternalIP()
 				if err != nil {
+					// If we are unable to get the external IP, we should log
+					// it and continue to retry. Temporary network issues are
+					// common so retrying is sensible.
 					log.Println(err)
+					break
 				}
 				if ip != nil && prevIP.Equal(ip) == false {
 					prevIP = ip
@@ -83,7 +96,6 @@ func WatchExternalIP(ch chan<- net.IP) (context.CancelFunc, error) {
 				}
 
 			case <-ctx.Done():
-				fmt.Println("WatchExternalIP cancelled")
 				return
 			}
 		}
