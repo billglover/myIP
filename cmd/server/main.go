@@ -11,20 +11,30 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-var ipsRequested = promauto.NewCounter(prometheus.CounterOpts{
-	Name: "myip_requests_total",
-	Help: "The total number of IPs requested",
-})
+var (
+	resCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "myip",
+		Subsystem: "server",
+		Name:      "response_count_total",
+		Help:      "Response count",
+	}, []string{"code"})
+	resDurations = promauto.NewSummaryVec(prometheus.SummaryOpts{
+		Namespace:  "myip",
+		Subsystem:  "server",
+		Name:       "response_durations_seconds",
+		Help:       "Response latency distributions",
+		Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
+	}, []string{"code"})
+)
 
 func main() {
-	http.HandleFunc("/ip", ipHandler)
+	http.HandleFunc("/ip",promhttp.InstrumentHandlerCounter(resCount, promhttp.InstrumentHandlerDuration(resDurations, http.HandlerFunc(ipHandler))))
 	http.Handle("/metrics", promhttp.Handler())
 	http.Handle("/metrics/", promhttp.Handler())
-	
+
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
-		log.Printf("Defaulting to port %s", port)
+		log.Fatal("environment variable PORT is not set")
 	}
 
 	log.Printf("Listening on port %s", port)
@@ -32,15 +42,10 @@ func main() {
 }
 
 func ipHandler(res http.ResponseWriter, req *http.Request) {
-
-	ipsRequested.Inc()
-
 	ip := req.Header.Get("X-Forwarded-For")
 	if ip == "" {
-		log.Println("/ip, 404, X-Forwarded-For not set")
-		res.WriteHeader(http.StatusNotFound)
+		res.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	log.Printf("/ip, 200, %s\n", ip)
 	fmt.Fprintln(res, ip)
 }
