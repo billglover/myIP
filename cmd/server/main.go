@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 
@@ -28,22 +29,26 @@ var (
 )
 
 func main() {
-	http.HandleFunc("/ip",promhttp.InstrumentHandlerCounter(resCount, promhttp.InstrumentHandlerDuration(resDurations, http.HandlerFunc(ipHandler))))
-	http.Handle("/metrics", promhttp.Handler())
-	http.Handle("/metrics/", promhttp.Handler())
-
 	port := os.Getenv("PORT")
 	if port == "" {
 		log.Fatal("environment variable PORT is not set")
 	}
+
+	http.Handle("/metrics", promhttp.Handler())
+
+	http.HandleFunc("/ip",
+		promhttp.InstrumentHandlerCounter(resCount,
+			promhttp.InstrumentHandlerDuration(resDurations,
+				http.HandlerFunc(ipHandler))))
 
 	log.Printf("Listening on port %s", port)
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", port), nil))
 }
 
 func ipHandler(res http.ResponseWriter, req *http.Request) {
-	ip := req.Header.Get("X-Forwarded-For")
-	if ip == "" {
+	xff := req.Header.Get("X-Forwarded-For")
+	ip := net.ParseIP(xff)
+	if ip == nil {
 		res.WriteHeader(http.StatusBadRequest)
 		return
 	}
