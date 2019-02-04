@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -47,7 +48,10 @@ func main() {
 
 func ipHandler(res http.ResponseWriter, req *http.Request) {
 	xff := req.Header.Get("X-Forwarded-For")
-	ip := net.ParseIP(xff)
+	addrs := strings.Split(xff, ",")
+	addr := strings.TrimSpace(addrs[0])
+
+	ip := net.ParseIP(addr)
 	if ip == nil {
 		res.WriteHeader(http.StatusBadRequest)
 		return
